@@ -247,6 +247,48 @@ func TestUpsert(t *testing.T) {
 		assert.Equal(t, map[string]string{"expiry": "2"}, actual.Metadata())
 	})
 
+	t.Run("inserts a secret whose Marshal returns its backing buffer", func(t *testing.T) {
+		bs := keychainStore[*bufferSecret]{
+			serviceGroup: serviceGroup,
+			serviceName:  serviceName,
+			factory: func(_ context.Context, _ store.ID) *bufferSecret {
+				return &bufferSecret{}
+			},
+		}
+		id := store.MustParseID(serviceGroup + "/" + serviceName + "/" + uuid.NewString())
+		t.Cleanup(func() {
+			assert.NoError(t, bs.Delete(t.Context(), id))
+		})
+
+		require.NoError(t, bs.Upsert(t.Context(), id, &bufferSecret{value: []byte("review-test-value")}))
+
+		got, err := bs.Get(t.Context(), id)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("review-test-value"), got.(*bufferSecret).value)
+	})
+
+	t.Run("rejects an empty secret value and keeps the existing one", func(t *testing.T) {
+		bs := keychainStore[*bufferSecret]{
+			serviceGroup: serviceGroup,
+			serviceName:  serviceName,
+			factory: func(_ context.Context, _ store.ID) *bufferSecret {
+				return &bufferSecret{}
+			},
+		}
+		id := store.MustParseID(serviceGroup + "/" + serviceName + "/" + uuid.NewString())
+		t.Cleanup(func() {
+			assert.NoError(t, bs.Delete(t.Context(), id))
+		})
+
+		require.NoError(t, bs.Save(t.Context(), id, &bufferSecret{value: []byte("review-old-value")}))
+		require.ErrorIs(t, bs.Upsert(t.Context(), id, &bufferSecret{}), ErrEmptySecret)
+		require.ErrorIs(t, bs.Upsert(t.Context(), id, &bufferSecret{value: []byte{}}), ErrEmptySecret)
+
+		got, err := bs.Get(t.Context(), id)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("review-old-value"), got.(*bufferSecret).value)
+	})
+
 	t.Run("save returns duplicate item error when credential already exists", func(t *testing.T) {
 		id := store.MustParseID(serviceGroup + "/" + serviceName + "/" + uuid.NewString())
 		t.Cleanup(func() {
@@ -262,6 +304,33 @@ func TestUpsert(t *testing.T) {
 		err := ks.Save(t.Context(), id, secret)
 		require.ErrorIs(t, err, ErrDuplicateItem)
 	})
+}
+
+type bufferSecret struct {
+	value    []byte
+	metadata map[string]string
+}
+
+func (b *bufferSecret) Marshal() ([]byte, error) {
+	return b.value, nil
+}
+
+func (b *bufferSecret) Unmarshal(data []byte) error {
+	if len(data) == 0 {
+		b.value = nil
+		return nil
+	}
+	b.value = append([]byte(nil), data...)
+	return nil
+}
+
+func (b *bufferSecret) Metadata() map[string]string {
+	return b.metadata
+}
+
+func (b *bufferSecret) SetMetadata(md map[string]string) error {
+	b.metadata = md
+	return nil
 }
 
 func TestConvertAttributes(t *testing.T) {

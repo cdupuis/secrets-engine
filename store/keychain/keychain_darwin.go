@@ -186,6 +186,10 @@ func (k *keychainStore[T]) Save(_ context.Context, id store.ID, secret store.Sec
 		return err
 	}
 	defer clear(data)
+	return k.add(id, secret, data)
+}
+
+func (k *keychainStore[T]) add(id store.ID, secret store.Secret, data []byte) error {
 	item := newKeychainItem(id.String(), k)
 	item.SetData(data)
 	// only creation of a secret needs the label attribute.
@@ -216,31 +220,28 @@ func (k *keychainStore[T]) genericMetadata(id store.ID, secret store.Secret) map
 // Updating in place keeps the item's access control and partition lists, so
 // applications the user allowed to read the item stay allowed. Deleting and
 // re-adding it would reset those lists to the calling binary alone.
-func (k *keychainStore[T]) Upsert(ctx context.Context, id store.ID, secret store.Secret) error {
+func (k *keychainStore[T]) Upsert(_ context.Context, id store.ID, secret store.Secret) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	err := k.update(id, secret)
-	if !errors.Is(err, store.ErrCredentialNotFound) {
-		return err
-	}
-	err = k.Save(ctx, id, secret)
-	if errors.Is(err, ErrDuplicateItem) {
-		// Another process added the item after our update missed it.
-		return k.update(id, secret)
-	}
-	return err
-}
-
-func (k *keychainStore[T]) update(id store.ID, secret store.Secret) error {
 	data, err := secret.Marshal()
 	if err != nil {
 		return err
 	}
 	defer clear(data)
+	if len(data) == 0 {
+		return ErrEmptySecret
+	}
 
-	// The query names only the attributes that identify the item; the match
-	// and return options of newKeychainItem belong to SecItemCopyMatching.
+	err = k.update(id, secret, data)
+	if !errors.Is(err, store.ErrCredentialNotFound) {
+		return err
+	}
+	return k.add(id, secret, data)
+}
+
+func (k *keychainStore[T]) update(id store.ID, secret store.Secret, data []byte) error {
+	// We aren't using newKeychainItem here because we only want to identify the item, not read it.
 	query := kc.NewItem()
 	query.SetSecClass(kc.SecClassGenericPassword)
 	query.SetService(k.serviceName)

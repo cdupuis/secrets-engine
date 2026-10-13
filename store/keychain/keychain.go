@@ -47,6 +47,8 @@ var ErrCollectionLocked = errors.New("keychain collection is locked")
 // existing item in place.
 var ErrDuplicateItem = errors.New("keychain item already exists")
 
+var ErrEmptySecret = errors.New("keychain secret value must not be empty")
+
 type (
 	Option            interface{ apply(any) error }
 	optionFunc[K any] func(K) error
