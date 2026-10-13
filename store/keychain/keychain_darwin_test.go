@@ -20,13 +20,13 @@ import (
 	"bytes"
 	"context"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/secrets-engine/store"
+	kc "github.com/docker/secrets-engine/store/keychain/internal/go-keychain"
 	"github.com/docker/secrets-engine/store/mocks"
 )
 
@@ -221,11 +221,18 @@ func TestUpsert(t *testing.T) {
 			Password:   "original-password",
 			Attributes: map[string]string{"expiry": "1"},
 		}))
+		query := kc.NewItem()
+		query.SetSecClass(kc.SecClassGenericPassword)
+		query.SetService(serviceName)
+		query.SetAccessGroup(serviceGroup)
+		query.SetAccount(id.String())
+		marker := kc.NewItem()
+		marker.SetComment("set-outside-the-store")
+		require.NoError(t, kc.UpdateItem(query, marker))
+
 		before, err := getItemWithData(id.String(), &ks)
 		require.NoError(t, err)
-
-		// Keychain timestamps have one-second resolution.
-		time.Sleep(1100 * time.Millisecond)
+		require.Equal(t, "set-outside-the-store", before.Comment)
 
 		updated := &mocks.MockCredential{
 			Username:   "dana",
@@ -236,8 +243,7 @@ func TestUpsert(t *testing.T) {
 
 		after, err := getItemWithData(id.String(), &ks)
 		require.NoError(t, err)
-		assert.Equal(t, before.CreationDate, after.CreationDate, "the item must be updated, not deleted and re-added")
-		assert.True(t, after.ModificationDate.After(before.ModificationDate))
+		assert.Equal(t, "set-outside-the-store", after.Comment, "the item must be updated, not deleted and re-added")
 		assert.Equal(t, before.Label, after.Label)
 
 		got, err := ks.Get(t.Context(), id)
@@ -287,6 +293,26 @@ func TestUpsert(t *testing.T) {
 		got, err := bs.Get(t.Context(), id)
 		require.NoError(t, err)
 		assert.Equal(t, []byte("review-old-value"), got.(*bufferSecret).value)
+	})
+
+	t.Run("save rejects an empty secret value", func(t *testing.T) {
+		bs := keychainStore[*bufferSecret]{
+			serviceGroup: serviceGroup,
+			serviceName:  serviceName,
+			factory: func(_ context.Context, _ store.ID) *bufferSecret {
+				return &bufferSecret{}
+			},
+		}
+		id := store.MustParseID(serviceGroup + "/" + serviceName + "/" + uuid.NewString())
+		t.Cleanup(func() {
+			assert.NoError(t, bs.Delete(t.Context(), id))
+		})
+
+		require.ErrorIs(t, bs.Save(t.Context(), id, &bufferSecret{}), ErrEmptySecret)
+		require.ErrorIs(t, bs.Save(t.Context(), id, &bufferSecret{value: []byte{}}), ErrEmptySecret)
+
+		_, err := bs.Get(t.Context(), id)
+		require.ErrorIs(t, err, store.ErrCredentialNotFound)
 	})
 
 	t.Run("save returns duplicate item error when credential already exists", func(t *testing.T) {

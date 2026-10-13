@@ -186,6 +186,9 @@ func (k *keychainStore[T]) Save(_ context.Context, id store.ID, secret store.Sec
 		return err
 	}
 	defer clear(data)
+	if len(data) == 0 {
+		return ErrEmptySecret
+	}
 	return k.add(id, secret, data)
 }
 
@@ -220,6 +223,10 @@ func (k *keychainStore[T]) genericMetadata(id store.ID, secret store.Secret) map
 // Updating in place keeps the item's access control and partition lists, so
 // applications the user allowed to read the item stay allowed. Deleting and
 // re-adding it would reset those lists to the calling binary alone.
+//
+// An empty secret value returns [ErrEmptySecret] without touching the
+// keychain. Another store instance or process can still write the same item
+// concurrently, in which case Upsert returns [ErrDuplicateItem].
 func (k *keychainStore[T]) Upsert(_ context.Context, id store.ID, secret store.Secret) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
